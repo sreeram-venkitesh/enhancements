@@ -221,18 +221,8 @@ List the specific goals of the KEP. What is it trying to achieve? How will we
 know that this has succeeded?
 -->
 
-
-**Goals**
-
 * Enable support for defining `additionalPrinterColumns` using **CEL expressions** in CustomResourceDefinitions (CRDs).
 * Allow CEL-based and JSONPath-based `additionalPrinterColumns` to coexist in the same CRD. Although, each `additionalPrinterColumn` must use either `jsonPath` or a CEL `expression` field to define the column, not both. However, you can define multiple columns in the same CRD, with some using `jsonPath` and others using CEL `expression` independently. (TODO: fix it)
-
-
-**Non-goals**
-
-* Modify, replace, or phase out JSONPath-based column definitions.
-* Expanding CEL’s access scope beyond the current design constraints (e.g., no access to arbitrary `metadata.*` fields beyond `name` and `generateName`). Refer caveats for information. (TODO:)
-* Changes to `kubectl` or other clients are required.
 
 ---
 
@@ -253,8 +243,11 @@ know that this has succeeded?
 What is out of scope for this KEP? Listing non-goals helps to focus discussion
 and make progress.
 -->
-- Making any changes to the existing JSONPath support.
-- Any change to kubectl or other clients.
+
+* Modify, replace, or phase out JSONPath-based column definitions.
+* Expanding CEL’s access scope beyond the current design constraints (e.g., no access to arbitrary `metadata.*` fields beyond `name` and `generateName`). Refer caveats for information. (TODO:)
+* Changes to `kubectl` or other clients are required.
+
 
 ## Proposal
 
