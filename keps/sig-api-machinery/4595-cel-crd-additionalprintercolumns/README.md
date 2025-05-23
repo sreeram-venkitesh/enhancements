@@ -376,8 +376,6 @@ spec:
     - name: READY
       type: string
       description: 'Status of the Ready condition'
-      jsonPath: ""  # no jsonPath since we use CEL expression below
-      priority: 0
       expression: 'self.status.conditions.exists(c, c.type == "Ready") ? self.status.conditions.filter(c, c.type == "Ready")[0].status : "Unknown"'
 ```
 
@@ -412,13 +410,7 @@ This shows output like `val1/val2` in `kubectl get` columns, improving clarity.
 
 #### Story 4
 
-Here’s a concise user story with an example, based on your description:
-
----
-
-### User Story
-
-* **As a Kubernetes user,** I want to format dates as relative durations (e.g., "5m ago" instead of absolute timestamps) in printer columns, making it easier to understand resource age or timing at a glance.
+As a Kubernetes user, I want to format dates as relative durations (e.g., "5m ago" instead of absolute timestamps) in printer columns, making it easier to understand resource age or timing at a glance.
 
 **Example:**
 
@@ -446,12 +438,6 @@ What are some important details that didn't come across above?
 Go in to as much detail as necessary here.
 This might be a good place to talk about core concepts and how they relate.
 -->
-
-Certainly! Here's the full, revised documentation with all your original context, rewritten for clarity and conciseness:
-
----
-
-### Notes / Constraints / Caveats
 
 As of this writing, when defining `additionalPrinterColumns` in a CRD using **CEL expressions**, access to fields under `metadata` is **limited**.
 
