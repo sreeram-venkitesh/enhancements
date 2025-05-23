@@ -322,7 +322,11 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
-We extend the `CustomResourceColumnDefinition` type by adding an `expression` field which takes CEL expressions as a string.
+Today CRD additionalPrinterColumns only supports jsonPath. Once we create a CRD, a new TableConvertor will be created where the jsonPath expression is parsed. The TableConvertor is what processes the output for additionalPrinterColumns when we query for custom resources. The jsonPath is validated during the CRD validation and is parsed when we create the TableConvertor. Building on top of this, our KEP adds support for a new expression column for CRD additionalPrinterColumns. This CEL expression would then be compiled during the CRD validation and during the TableConvertor creation. 
+
+We propose extending the CRD API as well as the TableConvertor logic to handle CEL expressions alongside the existing jsonPath logic without changing any of the current behaviour. Let's see how all of this will be implemented:
+
+We first extend the `CustomResourceColumnDefinition` type by adding an `expression` field which takes CEL expressions as a string.
 
 ```go
 type CustomResourceColumnDefinition struct {
@@ -338,7 +342,7 @@ type CustomResourceColumnDefinition struct {
 }
 ```
 
-We expect the additionalPrinterColumns of a CustomResourceDefinition to either have a `jsonPath` or an `expression` field. The validation would look like this:
+We expect the additionalPrinterColumns of a CustomResourceDefinition to either have a `jsonPath` or an `expression` field. Once we add the new expression field, we compile the CEL expression when CRD is validated. If the CEL compilation fails, the CRD is not applied and the validation fails:
 
 ```go
 func ValidateCustomResourceColumnDefinition(col *apiextensions.CustomResourceColumnDefinition, fldPath *field.Path) field.ErrorList {
@@ -354,39 +358,118 @@ func ValidateCustomResourceColumnDefinition(col *apiextensions.CustomResourceCol
 	}
 
 	if len(col.expression) != 0 {
-		// Placeholder method for the actual CEL validation that would happen at this stage.
-		if errs := validateCELExpression(col.expression, fldPath.Child("expression")); len(errs) > 0 {
-			allErrs = append(allErrs, errs...)
-		}
+    // Handle CEL context creation and error handling...
+
+    // CEL compilation during the validation stage
+    compilationResult = cel.Compile(col.Expression, structuralSchema, model.SchemaDeclType(s, true), celconfig.PerCallLimit, environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion(), true), cel.StoredExpressionsEnvLoader())
+    // Based on the CEL compilation result validate the additionalPrinterColumn
+    if compilationResult.Error != nil {
+			allErrs = append(allErrs, field.InternalError(fldPath, fmt.Errorf("CEL compilation failed for %s rules: %s", col.Expression, compilationResult.Error)))
+    }
+
+    // Handle CEL cost calculation and error handling...
 	}
 
 	return allErrs
 }
 ```
 
-For executing the CEL expression and printing the result would be done from `staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go` like so. We'd also define our own `findResults` and `printResults` methods for computing the CEL expressions.
+Once the CRD is validation and created, a new TableConvertor will be created for the CRD. Each additionalPrinterColumn of the CRD is defined in the TableConvertor with a columnPrinter interface. This interface has two methods, findResults and printResults, which would be used by the TableConvertor to compute and print the additionalPrinterColumns' values when we do a GET operation on the CRD. 
+
+Inside `staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go`, we have the `TableConvertor.New()` function which creates the TableConvertor for a CRD. This is done from the crdHandler when the CRD is created or updated. Today for jsonPath additionalPrinterColumns, we parse the jsonPath expression inside the `TableConvertor.New()` function.
 
 ```go
-func New(crdColumns []apiextensionsv1.CustomResourceColumnDefinition) (rest.TableConvertor, error) {
-	// ...
+  path := jsonpath.New(col.Name)
+  if err := path.Parse(fmt.Sprintf("{%s}", col.JSONPath)); err != nil {
+    return c, fmt.Errorf("unrecognized column definition %q", col.JSONPath)
+  }
+  path.AllowMissingKeys(true)
+  c.additionalColumns = append(c.additionalColumns, path)
+```
 
-	fetch baseEnv
-	extend env
+Similarly, we add logic to compile the CEL expression again from `TableConvertor.New()`
 
-	for _, col := range crdColumns {
-		ast := env.Compile(col.expression)
+```go
+		if len(col.JSONPath) > 0 && len(col.Expression) == 0 {
+      // existing jsonPath logic
+		} else if len(col.Expression) > 0 && len(col.JSONPath) == 0 {
+			compResult := cel.CompileColumn(col.Expression, s, model.SchemaDeclType(s, true), celconfig.PerCallLimit, environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion(), true), cel.StoredExpressionsEnvLoader())
 
-		if len(col.JSONPath == 0){
-			// existing JSONPath code
-		} else {
-			celProgram, err := cel.NewProgram(ast)
-			if err != nil {
-				return c, fmt.Errorf("unrecognised column definition %q", col.expression)
+			if compResult.Error != nil {
+				return c, fmt.Errorf("CEL compilation error %q", compResult.Error)
 			}
-			c.additionalColumns = append(c.additionalColumns, celProgram)
+			c.additionalColumns = append(c.additionalColumns, compResult.Program)
 		}
+```
+
+With this, we get a `converter` object which has a column printers for columns defined with both jsonPath and expression. As part of this, we also define a new `additionalPrinterColumnCelCompilationResult` struct which implements the `columnPrinter` interface so that we can pass the CEL program to the TableConvertor's `ConvertToTable` method, which will call findResults and printResults for all the additionalPrinterColumns, regardless of whether they're defined with jsonPath or CEL expression. 
+
+The CEL column compilation struct and its findResults and printResults implementations would look something like this:
+
+```go
+type additionalPrinterColumnCelCompilationResult struct {
+	Error          error
+	MaxCost        uint64
+	MaxCardinality uint64
+	FieldPath      *field.Path
+	Program        cel.Program
+}
+
+func (c additionalPrinterColumnCelCompilationResult) FindResults(data interface{}) ([][]reflect.Value, error) {
+	vars := map[string]interface{}{
+		"self": data,
+	}
+
+	evalResult, det, err := c.Program.Eval(vars)
+
+	if err != nil {
+    // error handling..
+	}
+
+	reflectSlice := [][]reflect.Value{
+		{reflect.ValueOf(evalResult)},
+	}
+
+	return reflectSlice, nil
+}
+
+func (c celProgram) PrintResults(w io.Writer, results []reflect.Value) error {
+	for _, result := range results {
+		klog.V(1).Info("Inside FindResults for loop")
+		klog.V(1).Info(result)
+		var str string
+		switch result.Kind() {
+		case reflect.String:
+			str = result.String() // If it's a string, just use it
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			str = fmt.Sprintf("%d", result.Int()) // If it's an integer, convert to string
+		case reflect.Float32, reflect.Float64:
+			str = fmt.Sprintf("%f", result.Float()) // If it's a float, convert to string
+		case reflect.Bool:
+			str = fmt.Sprintf("%v", result.Bool()) // If it's a bool, convert to string
+		default:
+			str = fmt.Sprintf("%v", result.Interface()) // Use the default string representation for other types
+		}
+
+		// Convert the string to a byte slice
+		_, err := w.Write([]byte(str))
+		if err != nil {
+			klog.V(1).Info("Error inside cel printresults")
+			klog.V(1).Info(err)
+			return err // Return the error if the write failed
+		}
+	}
+
+	// No error, return nil
+	return nil
 }
 ```
+
+With this, the current `ConvertToTable` method can support additionalPrinterColumns without any changes.
+
+### Cost Calculation and benchmarking performance with jsonPath
+
+A big part of the discussions for our proposal was the CEL cost limits since this is the first time CEL is added to the read path. As part of this we've done some benchmarking of the time it takes to parse and compile equivalent jsonPath and CEL expressions.
 
 ### Test Plan
 
@@ -433,7 +516,18 @@ This can inform certain test coverage improvements that we want to do before
 extending the production code to implement this enhancement.
 -->
 
-- `k8s.io/apiextensions-apiserver/pkg/apiserver/schema`: `<date>` - `<test coverage>`
+Alpha:
+
+- Test that validation passes when we create an additionalPrinterColumn with an expression field with valid CEL expression
+- Test that validation fails when we create an additionalPrinterColumn with an expression field with an invalid CEL expression
+- Test that existing behaviour of jsonPath is not altered when creating CRDs with only jsonPath additionalPrinterColumns
+- Test that validation fails when we create an additionalPrinterColumn with both jsonPath and expression fields
+- Test that validation passes when we create multiple additionalPrinterColumns with both jsonPath and expression fields
+- Test that validation fails when we try to create an additionalPrinterColumn with expression field when the feature gate is turned off
+- Verify that CEL compilation errors are caught at the validation phase
+- Verify that TableConvertor is getting created for the CRD with both jsonPath and expression columns
+- Verify that CEL compilation at the TableConvertor creation stage succeeds
+<!-- - `k8s.io/apiextensions-apiserver/pkg/apiserver/schema`: `<date>` - `<test coverage>` -->
 
 ##### Integration tests
 
@@ -452,7 +546,11 @@ For Beta and GA, add links to added tests together with links to k8s-triage for 
 https://storage.googleapis.com/k8s-triage/index.html
 -->
 
-- <test>: <link to test coverage>
+- Verify that CRDs are getting created with additionalPrinterColumns with both jsonPath and expression fields
+- Verify that CEL compilation errors are caught at the CRD validation stage
+- Verify that existing behaviour is not altered when creating CRDs with only jsonPath additionalPrinterColumns
+
+<!-- - <test>: <link to test coverage> -->
 
 ##### e2e tests
 
@@ -535,14 +633,15 @@ in back-to-back releases.
 #### Alpha
 
 - Feature implemented behind a feature flag
+- Initial benchmarks to compare performance of JSONPath with CEL columns and set an appropriate CEL cost
 - Unit tests and integration tests completed and enabled
-- Implement the new expression field for additionalPrinterColumns with an approximate CEL cost
 
 #### Beta
 
 - Gather feedback from developers and surveys
-- Additional e2e tests added
-- Benchmarking JSONPath execution and modify CEL cost if needed
+- Add e2e tests
+- Add appropriate metrics - for additionalPrinterColumn usage and CEL cost usage
+- More benchmarking to compare JSONPath and CEL execution and modify CEL cost if needed
 
 #### GA
 
