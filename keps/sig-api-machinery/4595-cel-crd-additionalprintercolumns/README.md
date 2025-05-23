@@ -534,10 +534,6 @@ This behavior is aligned with how `jsonPath`-based `additionalPrinterColumns` cu
 The same strategy will be applied for CEL: evaluation failures will result in an empty column, and the underlying error will be logged. This ensures user experience remains consistent and resilient to partial data issues.
 
 
-#### CEL evaluation resulting in error
-
-The CEL expression provided by the user can evaluate to an error, we can either catch this while validating the CRD or notify the user of the error in the table when fetching the CRDs
-
 ## Design Details
 
 <!--
