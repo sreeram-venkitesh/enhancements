@@ -517,7 +517,8 @@ With CEL-based `additionalPrinterColumns`, users may write highly complex expres
 **Mitigation:**
 
 A finite CEL cost model is enforced, as is standard with other CEL-enabled features in Kubernetes. This model limits the computational cost during expression compilation. If a CEL expression exceeds the allowed cost, the compilation will timeout and fail gracefully.
-For expressions that are within the cost limits but still slow due to complexity, the responsibility lies with the CRD author to balance readability, maintainability, and performance.
+
+For expressions that are within the cost limits but still slow due to complexity, the responsibility lies with the CRD author to keep or drop them.
 
 
 #### Runtime evaluation errors despite successful compilation
