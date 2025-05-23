@@ -260,7 +260,7 @@ The "Design Details" section below is for the real
 nitty-gritty.
 -->
 
-This proposal introduces a new, mutually exclusive sibling field to `additionalPrinterColumns[].jsonPath` called `additionalPrinterColumns[].expression`. This field allows defining printer column values using CEL (Common Expression Language) expressions that evaluate to strings.
+This KEP propses a new, mutually exclusive sibling field to `additionalPrinterColumns[].jsonPath` called `additionalPrinterColumns[].expression`. This field allows defining printer column values using CEL (Common Expression Language) expressions that evaluate to strings.
 
 To support this, the Kubernetes API will be extended to accept CEL expressions for printer columns, and the API server will evaluate these expressions dynamically when responding to `Table` requests (e.g., `kubectl get`), producing richer, computed, or combined column outputs.
 
@@ -293,37 +293,13 @@ This enhancement enables flexible, human-friendly column formatting and logic in
 
 ---
 
-
-The proposal is to add a mutually exclusive sibling to the `additionalPrinterColumns[].jsonPath` field of CRDs, `additionalPrinterColumns[].expression` which would encode the column values with a CEL expression that resolves to a string. We'd need to change the API so that printer columns can be expressed with CEL, and update the REST response for `Table` requests to run the CEL code for the list of resources requested.
-
-If you have the following additionalPrinterColumn defined in your custom resource definition:
-
-```yaml
-additionalPrinterColumns:
-- name: Replicas
-  type: string
-  expression: "%d/%d".format([self.status.replicas, self.spec.replicas])
-- name: Age
-  type: date
-  jsonPath: .metadata.creationTimestamp
-- name: Status
-  type: string
-  expression: self.status.replicas == self.spec.replicas ? "READY" : "WAITING"
-```
-
-it could yield the following:
-
-```
-NAME                 REPLICAS     AGE      STATUS
-myresource           1/1          7s       READY
-myresource2          0/1          2s       WAITING
-```
-
 ### Calculating CEL cost limits
 
 We want to make sure that the time taken for computing the CEL expressions for additionalPrinterColumns would be in the same order of magnitude as that of using JSONPath and set the CEL cost limit accordingly. Let's assume we have a representative CRD with 10 additionalPrinterColumns. The total time taken for executing the all the JSONPaths would be equal to the time taken for executing a single JSONPath expression times the total number of additionalPrinterColumns. As part of this proposal we aim to calculate a reasonable total cost for the CEL expressions by multiplying the total number of seconds it takes the expressions to get evaluated with a CEL cost per second, which would be a constant.
 
 As part of this benchmarking, we are also planning to calculate the percentage of time of a `kubectl get` call on a CRD is taken up to compute the additionalPrinterColumns JSONPath. If it is a low enough value, we can set a higher CEL cost before users would notice a time difference between using CEL or JSONPath.
+
+---
 
 ### User Stories (Optional)
 
