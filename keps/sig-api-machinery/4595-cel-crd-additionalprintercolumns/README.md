@@ -225,22 +225,27 @@ know that this has succeeded?
 **Goals**
 
 * Enable support for defining `additionalPrinterColumns` using **CEL expressions** in CustomResourceDefinitions (CRDs).
+* Allow CEL-based and JSONPath-based `additionalPrinterColumns` to coexist in the same CRD. Although, each `additionalPrinterColumn` must use either `jsonPath` or a CEL `expression` field to define the column, not both. However, you can define multiple columns in the same CRD, with some using `jsonPath` and others using CEL `expression` independently. (TODO: fix it)
+
+
+**Non-goals**
+
+* Modify, replace, or phase out JSONPath-based column definitions.
+* Expanding CEL’s access scope beyond the current design constraints (e.g., no access to arbitrary `metadata.*` fields beyond `name` and `generateName`). Refer caveats for information. (TODO:)
+* Changes to `kubectl` or other clients are required.
+
+---
+
+* CEL expressions are compiled at CRD creation time—first during validation via [`ValidateCustomResourceColumnDefinition(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation/validation.go#L789-L790), and again when setting up the table convertor via [`tableconvertor.New(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L39-L41). They are then evaluated at runtime when [printing columns during resource listing](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L115-L135). This feature does not support recompiling CEL expressions at runtime—changes require re-applying the CRD.
+
 * Leverage CEL’s capabilities to allow expressive, type-safe logic for formatting and displaying CR instances in `kubectl get` outputs.
 * Ensure consistency in validation and cost enforcement by reusing existing CEL cost models already integrated across the Kubernetes project.
 * Evaluate CEL expressions during `Table` responses (e.g., `kubectl get`), enabling runtime column rendering based on the resource state.
 * Apply `type` and `format` attributes to CEL expressions just as they are for `jsonPath`.
-* Allow CEL-based and JSONPath-based `additionalPrinterColumns` to coexist in the same CRD. Although, each `additionalPrinterColumn` must use either `jsonPath` or a CEL `expression` field to define the column, not both. However, you can define multiple columns in the same CRD, with some using `jsonPath` and others using CEL `expression` independently.
 * Maintain backward compatibility; CRDs using `jsonPath` for `additionalPrinterColumns` remain fully supported.
 * Ensure safe and predictable behavior when CEL expressions fail at runtime—fallback to empty columns and log errors.
 
-**Non-goals**
-
-* This enhancement complements existing support—it does not modify, replace, or phase out JSONPath-based column definitions.
-* Expanding CEL’s access scope beyond the current design constraints (e.g., no access to arbitrary `metadata.*` fields beyond `name` and `generateName`).
-* Allowing side effects or mutations in CEL expressions; CEL remains read-only and deterministic.
-* CEL expressions are compiled at CRD creation time—first during validation via [`ValidateCustomResourceColumnDefinition(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation/validation.go#L789-L790), and again when setting up the table convertor via [`tableconvertor.New(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L39-L41). They are then evaluated at runtime when [printing columns during resource listing](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L115-L135). This feature does not support recompiling CEL expressions at runtime—changes require re-applying the CRD.
-* No changes to `kubectl` or other clients are required; CEL evaluation is handled entirely server-side.
-
+---
 
 ### Non-Goals
 
