@@ -457,7 +457,7 @@ This might be a good place to talk about core concepts and how they relate.
 
 As of this writing, when defining `additionalPrinterColumns` in a CRD using **CEL expressions**, access to fields under `metadata` is **limited**.
 
-Only `metadata.name` and `metadata.generateName` are supported, as per the current [design decision](https://github.com/kubernetes/kubernetes/blob/55f2bc10435160619d1ece8de49a1c0f8fcdf276/staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model/schemas.go#L39-L73)).
+Only `metadata.name` and `metadata.generateName` are supported, as per the current [design decision](https://github.com/kubernetes/kubernetes/blob/55f2bc10435160619d1ece8de49a1c0f8fcdf276/staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model/schemas.go#L39-L73).
 
 This makes CEL-based columns less flexible than those defined using `jsonPath`, which can access additional `metadata` fields like `creationTimestamp`, `labels`, and `ownerReferences`, etc.
 
@@ -486,10 +486,10 @@ additionalPrinterColumns:
 - name: Age
   type: date
   description: Time since creation
-  expression: self.metadata.creationTimestamp  # ❌ Fails
+  expression: self.metadata.creationTimestamp  
 ```
 
-**Error:** (TODO: Psaggu to ask Sreeram to provide the exact error)
+**Error:** (TODO: Psaggu to ask Sreeram to provide the exact error, rework the examples.)
 
 ```
 compilation failed: ERROR:: undefined field 'creationTimestamp'
@@ -510,22 +510,27 @@ How will UX be reviewed, and by whom?
 Consider including folks who also work outside the SIG or subproject.
 -->
 
-- **Risk 1: Complex CEL expressions may impact compilation performance**
-  With CEL-based `additionalPrinterColumns`, users may write highly complex expressions to fulfill specific use cases. These expressions can lead to longer compilation times or excessive compute cost during CRD creation.
+#### Complex CEL expressions may impact compilation performance
 
-  **Mitigation:**
-  A finite CEL cost model is enforced, as is standard with other CEL-enabled features in Kubernetes. This model limits the computational cost during expression compilation. If a CEL expression exceeds the allowed cost, the compilation will timeout and fail gracefully.
-  For expressions that are within the cost limits but still slow due to complexity, the responsibility lies with the CRD author to balance readability, maintainability, and performance.
+With CEL-based `additionalPrinterColumns`, users may write highly complex expressions to fulfill specific use cases. These expressions can lead to longer compilation times or excessive compute cost during CRD creation.
+
+**Mitigation:**
+
+A finite CEL cost model is enforced, as is standard with other CEL-enabled features in Kubernetes. This model limits the computational cost during expression compilation. If a CEL expression exceeds the allowed cost, the compilation will timeout and fail gracefully.
+For expressions that are within the cost limits but still slow due to complexity, the responsibility lies with the CRD author to balance readability, maintainability, and performance.
 
 
-- **Risk 2: Runtime evaluation errors despite successful compilation**
-  CEL expressions are compiled during CRD creation but evaluated later during API usage, such as `kubectl get <resource>`. As a result, runtime data inconsistencies can cause evaluation errors even if compilation was successful.
+#### Runtime evaluation errors despite successful compilation
 
-  For example, if a CEL expression references fields not present in a given Custom Resource instance—due to missing data, schema changes, or optional fields—the evaluation may fail.
+CEL expressions are compiled during CRD creation but evaluated later during API usage, such as `kubectl get <resource>`. As a result, runtime data inconsistencies can cause evaluation errors even if compilation was successful.
 
-  **Mitigation:**
-  This behavior is aligned with how `jsonPath`-based `additionalPrinterColumns` currently function. If a `jsonPath` evaluation fails, an empty value is printed in the column.
-  The same strategy will be applied for CEL: evaluation failures will result in an empty column, and the underlying error will be logged. This ensures user experience remains consistent and resilient to partial data issues.
+For example, if a CEL expression references fields not present in a given Custom Resource instance—due to missing data, schema changes, or optional fields—the evaluation may fail.
+
+**Mitigation:**
+
+This behavior is aligned with how `jsonPath`-based `additionalPrinterColumns` currently function. If a `jsonPath` evaluation fails, an empty value is printed in the column.
+
+The same strategy will be applied for CEL: evaluation failures will result in an empty column, and the underlying error will be logged. This ensures user experience remains consistent and resilient to partial data issues.
 
 
 #### CEL evaluation resulting in error
