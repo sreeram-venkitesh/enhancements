@@ -324,6 +324,10 @@ additionalPrinterColumns:
   expression: "flatten(self.spec.servers.map(s, s.hosts))"
 ```
 
+```
+output
+```
+
 In the above example:
 
 * `spec.servers` is mapped to extract each `hosts` array.
@@ -379,6 +383,10 @@ spec:
       expression: 'self.status.conditions.exists(c, c.type == "Ready") ? self.status.conditions.filter(c, c.type == "Ready")[0].status : "Unknown"'
 ```
 
+```
+output
+```
+
 This expression checks if a condition with `type == "Ready"` exists. If so, it returns its status; otherwise, it returns `"Unknown"`. This approach enables clear, user-friendly status reporting for conditions stored as arrays in the CRD.
 
 **References:**
@@ -402,6 +410,10 @@ additionalPrinterColumns:
   expression: 'format("%s/%s", self.spec.sub.foo, self.spec.sub.bar)'
 ```
 
+```
+output
+```
+
 This shows output like `val1/val2` in `kubectl get` columns, improving clarity.
 
 **References:**
@@ -420,6 +432,10 @@ additionalPrinterColumns:
     type: string
     description: Duration between start and completion
     expression: 'timestamp(self.status.completionTimestamp) - timestamp(self.status.startTimestamp)'
+```
+
+```
+output
 ```
 
 This would allow `kubectl get` to display the elapsed time between start and completion timestamps as a formatted duration.
