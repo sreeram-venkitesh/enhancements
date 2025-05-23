@@ -221,7 +221,26 @@ List the specific goals of the KEP. What is it trying to achieve? How will we
 know that this has succeeded?
 -->
 
-- Provide an alternative to configuring additionalPrinterColumns with JSONPath.
+
+**Goals**
+
+* Enable support for defining `additionalPrinterColumns` using **CEL expressions** in CustomResourceDefinitions (CRDs).
+* Leverage CEL’s capabilities to allow expressive, type-safe logic for formatting and displaying CR instances in `kubectl get` outputs.
+* Ensure consistency in validation and cost enforcement by reusing existing CEL cost models already integrated across the Kubernetes project.
+* Evaluate CEL expressions during `Table` responses (e.g., `kubectl get`), enabling runtime column rendering based on the resource state.
+* Apply `type` and `format` attributes to CEL expressions just as they are for `jsonPath`.
+* Allow CEL-based and JSONPath-based `additionalPrinterColumns` to coexist in the same CRD. Although, each `additionalPrinterColumn` must use either `jsonPath` or a CEL `expression` field to define the column, not both. However, you can define multiple columns in the same CRD, with some using `jsonPath` and others using CEL `expression` independently.
+* Maintain backward compatibility; CRDs using `jsonPath` for `additionalPrinterColumns` remain fully supported.
+* Ensure safe and predictable behavior when CEL expressions fail at runtime—fallback to empty columns and log errors.
+
+**Non-goals**
+
+* This enhancement complements existing support—it does not modify, replace, or phase out JSONPath-based column definitions.
+* Expanding CEL’s access scope beyond the current design constraints (e.g., no access to arbitrary `metadata.*` fields beyond `name` and `generateName`).
+* Allowing side effects or mutations in CEL expressions; CEL remains read-only and deterministic.
+* CEL expressions are compiled at CRD creation time—first during validation via [`ValidateCustomResourceColumnDefinition(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation/validation.go#L789-L790), and again when setting up the table convertor via [`tableconvertor.New(...)`](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L39-L41). They are then evaluated at runtime when [printing columns during resource listing](https://github.com/kubernetes/kubernetes/blob/b35c5c0a301d326fdfa353943fca077778544ac6/staging/src/k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor/tableconvertor.go#L115-L135). This feature does not support recompiling CEL expressions at runtime—changes require re-applying the CRD.
+* No changes to `kubectl` or other clients are required; CEL evaluation is handled entirely server-side.
+
 
 ### Non-Goals
 
@@ -242,6 +261,40 @@ implementation. What is the desired outcome and how do we measure success?.
 The "Design Details" section below is for the real
 nitty-gritty.
 -->
+
+This proposal introduces a new, mutually exclusive sibling field to `additionalPrinterColumns[].jsonPath` called `additionalPrinterColumns[].expression`. This field allows defining printer column values using CEL (Common Expression Language) expressions that evaluate to strings.
+
+To support this, the Kubernetes API will be extended to accept CEL expressions for printer columns, and the API server will evaluate these expressions dynamically when responding to `Table` requests (e.g., `kubectl get`), producing richer, computed, or combined column outputs.
+
+## Example
+
+Given this CRD snippet:
+
+```yaml
+additionalPrinterColumns:
+- name: Replicas
+  type: string
+  expression: "%d/%d".format([self.status.replicas, self.spec.replicas])
+- name: Age
+  type: date
+  jsonPath: .metadata.creationTimestamp
+- name: Status
+  type: string
+  expression: self.status.replicas == self.spec.replicas ? "READY" : "WAITING"
+```
+
+The `kubectl get` output might look like:
+
+```
+NAME         REPLICAS   AGE    STATUS
+myresource   1/1        7s     READY
+myresource2  0/1        2s     WAITING
+```
+
+This enhancement enables flexible, human-friendly column formatting and logic in `kubectl get` outputs without requiring external tooling or complex `JSONPath` workarounds.
+
+---
+
 
 The proposal is to add a mutually exclusive sibling to the `additionalPrinterColumns[].jsonPath` field of CRDs, `additionalPrinterColumns[].expression` which would encode the column values with a CEL expression that resolves to a string. We'd need to change the API so that printer columns can be expressed with CEL, and update the REST response for `Table` requests to run the CEL code for the list of resources requested.
 
@@ -285,6 +338,131 @@ bogged down.
 
 #### Story 1
 
+**As a Kubernetes user,** I want to define `additionalPrinterColumns` that correctly aggregate and display all nested arrays within my CRD, so that `kubectl get` outputs the full list of hosts instead of only showing the first array. Current JSONPath-based columns only print the first matching array, resulting in incomplete data.
+
+Using CEL expressions for `additionalPrinterColumns` allows combining all nested arrays into a single flattened list, providing complete and accurate output in `kubectl get`.
+
+```yaml
+additionalPrinterColumns:
+- name: hosts
+  type: string
+  description: "All hosts from all servers"
+  expression: "flatten(self.spec.servers.map(s, s.hosts))"
+```
+
+In the above example:
+
+* `spec.servers` is mapped to extract each `hosts` array.
+* `flatten(...)` merges all those nested arrays into one list.
+* The resulting list of all hosts is displayed in the column output.
+
+**References:**
+
+* https://github.com/kubernetes/kubectl/issues/517
+* https://github.com/kubernetes/kubernetes/pull/67079
+* https://github.com/kubernetes/kubernetes/pull/101205
+* https://groups.google.com/g/kubernetes-sig-api-machinery/c/GxXWe6T8DoM
+
+#### Story 2
+
+As a Kubernetes user, I want to display the status of a specific condition (e.g., the "Ready" condition) from a list of status conditions in a human-readable column when using `kubectl get`. Currently, `jsonPath`-based `additionalPrinterColumns` cannot directly extract and display a single condition's status from an array of conditions, which limits usability and clarity.
+
+With CEL-based `additionalPrinterColumns`, I can define a column using an expression that filters and selects the relevant condition, making the output more meaningful.
+
+**Example:**
+
+Using the following CRD snippet, I define a `READY` column that uses a CEL expression to extract the status of the "Ready" condition:
+
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+...
+spec:
+  ...
+  versions:
+    ...
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          status:
+            type: object
+            properties:
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+  ...
+  additionalPrinterColumns:
+    - name: READY
+      type: string
+      description: 'Status of the Ready condition'
+      jsonPath: ""  # no jsonPath since we use CEL expression below
+      priority: 0
+      expression: 'self.status.conditions.exists(c, c.type == "Ready") ? self.status.conditions.filter(c, c.type == "Ready")[0].status : "Unknown"'
+```
+
+This expression checks if a condition with `type == "Ready"` exists. If so, it returns its status; otherwise, it returns `"Unknown"`. This approach enables clear, user-friendly status reporting for conditions stored as arrays in the CRD.
+
+**References:**
+
+* https://github.com/kubernetes/kubernetes/issues/67268
+
+
+#### Story 3
+
+As a Kubernetes user, I want to define an additional printer column that combines multiple fields from a sub-resource into a single human-readable string. The `additionalPrinterColumns` columns defined using `jsonPath` can’t concatenate fields, so the output is either limited or unclear.
+
+With CEL expressions in `additionalPrinterColumns`, it is possible to format and combine multiple fields cleanly for better readability.
+
+For example, in a CRD with `.spec.sub.foo` and `.spec.sub.bar`, this column defined using CEL expression combines the two fields with a slash:
+
+```yaml
+additionalPrinterColumns:
+- name: "Combined"
+  type: string
+  description: "Combined Foo and Bar values"
+  expression: 'format("%s/%s", self.spec.sub.foo, self.spec.sub.bar)'
+```
+
+This shows output like `val1/val2` in `kubectl get` columns, improving clarity.
+
+**References:**
+
+* https://github.com/operator-framework/operator-sdk/issues/3872
+
+#### Story 4
+
+Here’s a concise user story with an example, based on your description:
+
+---
+
+### User Story
+
+* **As a Kubernetes user,** I want to format dates as relative durations (e.g., "5m ago" instead of absolute timestamps) in printer columns, making it easier to understand resource age or timing at a glance.
+
+**Example:**
+
+```yaml
+additionalPrinterColumns:
+  - name: Duration
+    type: string
+    description: Duration between start and completion
+    expression: 'timestamp(self.status.completionTimestamp) - timestamp(self.status.startTimestamp)'
+```
+
+This would allow `kubectl get` to display the elapsed time between start and completion timestamps as a formatted duration.
+
+**Reference:**
+
+- https://stackoverflow.com/questions/70557581/kubernetes-crd-show-durations-in-additionalprintercolumns
+
+
 
 ### Notes/Constraints/Caveats (Optional)
 
@@ -294,6 +472,53 @@ What are some important details that didn't come across above?
 Go in to as much detail as necessary here.
 This might be a good place to talk about core concepts and how they relate.
 -->
+
+Certainly! Here's the full, revised documentation with all your original context, rewritten for clarity and conciseness:
+
+---
+
+### Notes / Constraints / Caveats
+
+As of this writing, when defining `additionalPrinterColumns` in a CRD using **CEL expressions**, access to fields under `metadata` is **limited**.
+
+Only `metadata.name` and `metadata.generateName` are supported, as per the current [design decision](https://github.com/kubernetes/kubernetes/blob/55f2bc10435160619d1ece8de49a1c0f8fcdf276/staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model/schemas.go#L39-L73)).
+
+This makes CEL-based columns less flexible than those defined using `jsonPath`, which can access additional `metadata` fields like `creationTimestamp`, `labels`, and `ownerReferences`, etc.
+
+For example, the following `jsonPath`-based configuration is valid and used in the [Cluster API project](https://github.com/kubernetes-sigs/cluster-api/blob/ef10e5aea3d3c9525dd83fa8a15005fc0b97d1b9/test/infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml#L19-L39):
+
+```yaml
+additionalPrinterColumns:
+- name: Age
+  type: date
+  description: Time since creation
+  jsonPath: .metadata.creationTimestamp
+- name: Cluster
+  type: string
+  description: Associated Cluster
+  jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+- name: Machine
+  type: string
+  description: Owning Machine
+  jsonPath: .metadata.ownerReferences[?(@.kind=="Machine")].name
+```
+
+Attempting to define the same columns using CEL expressions fails because any field under `metadata` (except `metadata.name` and `metadata.generateName`) is dropped during the [conversion of the CRD structural schema to a CEL declaration](https://github.com/kubernetes/kubernetes/blob/71f0fc6e72d53d5caf50b1314ca4d754463117f0/staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model/schemas.go#L26-L75):
+
+```yaml
+additionalPrinterColumns:
+- name: Age
+  type: date
+  description: Time since creation
+  expression: self.metadata.creationTimestamp  # ❌ Fails
+```
+
+**Error:** (TODO: Psaggu to ask Sreeram to provide the exact error)
+
+```
+compilation failed: ERROR:: undefined field 'creationTimestamp'
+```
+
 
 ### Risks and Mitigations
 
@@ -308,6 +533,24 @@ How will UX be reviewed, and by whom?
 
 Consider including folks who also work outside the SIG or subproject.
 -->
+
+- **Risk 1: Complex CEL expressions may impact compilation performance**
+  With CEL-based `additionalPrinterColumns`, users may write highly complex expressions to fulfill specific use cases. These expressions can lead to longer compilation times or excessive compute cost during CRD creation.
+
+  **Mitigation:**
+  A finite CEL cost model is enforced, as is standard with other CEL-enabled features in Kubernetes. This model limits the computational cost during expression compilation. If a CEL expression exceeds the allowed cost, the compilation will timeout and fail gracefully.
+  For expressions that are within the cost limits but still slow due to complexity, the responsibility lies with the CRD author to balance readability, maintainability, and performance.
+
+
+- **Risk 2: Runtime evaluation errors despite successful compilation**
+  CEL expressions are compiled during CRD creation but evaluated later during API usage, such as `kubectl get <resource>`. As a result, runtime data inconsistencies can cause evaluation errors even if compilation was successful.
+
+  For example, if a CEL expression references fields not present in a given Custom Resource instance—due to missing data, schema changes, or optional fields—the evaluation may fail.
+
+  **Mitigation:**
+  This behavior is aligned with how `jsonPath`-based `additionalPrinterColumns` currently function. If a `jsonPath` evaluation fails, an empty value is printed in the column.
+  The same strategy will be applied for CEL: evaluation failures will result in an empty column, and the underlying error will be logged. This ensures user experience remains consistent and resilient to partial data issues.
+
 
 #### CEL evaluation resulting in error
 
